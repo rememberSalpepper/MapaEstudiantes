@@ -1,3 +1,5 @@
+# app.py
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 from geopy.geocoders import GoogleV3
@@ -9,12 +11,23 @@ import numpy as np
 import html
 import folium
 from streamlit_folium import st_folium
+# from folium.plugins import MarkerCluster # No se usa
 
+# --- Configuración de la Página Streamlit ---
 st.set_page_config(layout="wide", page_title="Visor/Geocodificador Escolar")
 
+# --- Paleta de Colores y Constantes ---
 COLOR_PALETTE = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf', '#aec7e8', '#ffbb78', '#98df8a', '#ff9896', '#c5b0d5', '#c49c94', '#f7b6d2', '#c7c7c7', '#dbdb8d', '#9edae5']
 DEFAULT_COLOR = '#808080'
 
+# --- DATOS DEL COLEGIO (AÑADIR AQUÍ) ---
+COLEGIO_NOMBRE = "COLEGIO TENIENTE DAGOBERTO GODOY"
+COLEGIO_LAT = -33.5597464
+COLEGIO_LON = -70.65811107
+# ---------------------------------------
+
+
+# --- Función Cacheada load_process_data ---
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_process_data(_uploaded_file_obj, _attempt_geocoding, _street_col_name=None, _commune_col_name=None):
     file_name = _uploaded_file_obj.name
@@ -87,6 +100,7 @@ def load_process_data(_uploaded_file_obj, _attempt_geocoding, _street_col_name=N
         st.error(f"Error crítico ({file_name}): {e}")
         return None, 0, 0, False
 
+# --- Función para generar mapa de colores ---
 def get_course_color_map(courses):
     unique_courses = sorted(courses.astype(str).unique())
     color_map = {}
@@ -94,10 +108,11 @@ def get_course_color_map(courses):
         color_map[course] = COLOR_PALETTE[i % len(COLOR_PALETTE)]
     return color_map
 
-def sanitize_for_tooltip(text):
+# --- Función para Sanitizar Texto ---
+def sanitize_for_tooltip(text): # Renombrado para claridad, ya que solo se usa para tooltips ahora
     if pd.isna(text): return ""
     text = str(text)
-    return html.escape(text)
+    return html.escape(text) # html.escape es suficiente para tooltips simples
 
 # --- Lógica Principal de tu App Streamlit ---
 st.title("🗺️ Visor / Geocodificador Escolar por Curso")
@@ -184,67 +199,82 @@ if st.session_state.processed_data is not None:
     df_filtered = df_display_full
     if course_col_name in df_filtered.columns and st.session_state.selected_grades:
         df_filtered = df_filtered[df_filtered[course_col_name].astype(str).isin(st.session_state.selected_grades)]
-    df_map = df_filtered.dropna(subset=['LATITUD_GEO_FINAL', 'LONGITUD_GEO_FINAL']).copy()
+    df_map_data = df_filtered.dropna(subset=['LATITUD_GEO_FINAL', 'LONGITUD_GEO_FINAL']).copy() # Renombrado para claridad
 
-    if not df_map.empty:
+    # Condición para dibujar el mapa: si hay datos de alumnos O si el colegio está definido
+    if not df_map_data.empty or (COLEGIO_LAT is not None and COLEGIO_LON is not None):
         st.subheader("Mapa de Ubicaciones Filtrado")
-        map_center = [df_map['LATITUD_GEO_FINAL'].mean(), df_map['LONGITUD_GEO_FINAL'].mean()]
-        m = folium.Map(location=map_center, zoom_start=12, tiles='CartoDB positron')
 
-        for idx, row in df_map.iterrows():
-            grade_val = str(row.get(course_col_name, 'N/A')) # Obtener valor del grado
-            marker_color = st.session_state.course_color_map.get(grade_val, DEFAULT_COLOR)
+        # Calcular centro del mapa
+        if not df_map_data.empty:
+            map_center = [df_map_data['LATITUD_GEO_FINAL'].mean(), df_map_data['LONGITUD_GEO_FINAL'].mean()]
+            initial_zoom = 12
+        elif COLEGIO_LAT is not None and COLEGIO_LON is not None: # Solo el colegio
+            map_center = [COLEGIO_LAT, COLEGIO_LON]
+            initial_zoom = 15
+        else: # No debería llegar aquí si la lógica es correcta
+            map_center = [-33.55, -70.65] # Default Santiago
+            initial_zoom = 10
 
-            # Tooltip (label al pasar el mouse) mostrará solo el grado
-            tooltip_text = sanitize_for_tooltip(grade_val)
+        m = folium.Map(location=map_center, zoom_start=initial_zoom, tiles='CartoDB positron')
 
-            folium.CircleMarker(
-                location=[row['LATITUD_GEO_FINAL'], row['LONGITUD_GEO_FINAL']],
-                radius=5,
-                color=marker_color,
-                fill=True,
-                fill_color=marker_color,
-                fill_opacity=0.7,
-                weight=1,
-                tooltip=tooltip_text, # Solo tooltip
-                # popup=None # Sin popup
+        # --- AÑADIR MARCADOR DEL COLEGIO ---
+        if COLEGIO_LAT is not None and COLEGIO_LON is not None:
+            # Para un emoji de escuela 🏫, puedes usar DivIcon con HTML
+            # Esto es un poco más avanzado para asegurar el tamaño y alineación.
+            # Por simplicidad, usaremos un ícono de FontAwesome que es más estándar en Folium.
+            folium.Marker(
+                location=[COLEGIO_LAT, COLEGIO_LON],
+                tooltip=sanitize_for_tooltip(COLEGIO_NOMBRE), # Tooltip con el nombre
+                icon=folium.Icon(color='darkblue', icon_color='white', icon='school', prefix='fa') # Ícono de escuela
             ).add_to(m)
+        # ------------------------------------
+
+        # Añadir marcadores de alumnos (si df_map_data no está vacío)
+        if not df_map_data.empty:
+            for idx, row in df_map_data.iterrows():
+                grade_val = str(row.get(course_col_name, 'N/A'))
+                marker_color = st.session_state.course_color_map.get(grade_val, DEFAULT_COLOR)
+                tooltip_text = sanitize_for_tooltip(grade_val)
+
+                folium.CircleMarker(
+                    location=[row['LATITUD_GEO_FINAL'], row['LONGITUD_GEO_FINAL']],
+                    radius=5,
+                    color=marker_color,
+                    fill=True,
+                    fill_color=marker_color,
+                    fill_opacity=0.7,
+                    weight=1,
+                    tooltip=tooltip_text, # Solo tooltip
+                    # popup=None # Sin popups complejos por ahora
+                ).add_to(m)
 
         st_folium(m, width='100%', height=700, returned_objects=[])
-    else: st.warning("No hay coordenadas válidas para los cursos seleccionados.")
+    else: st.warning("No hay coordenadas válidas para los cursos seleccionados (o el colegio no está definido).")
 
     # --- Tabla de Datos ---
-    st.subheader("📋 Tabla de Datos Filtrados")
-    df_table_display = df_filtered.copy()
-    # Asegurar tipos string antes de mostrar/descargar
-    for col_name_str_tbl in ['D.V', 'RUN', 'CELULAR']: # Nombres de columna en MAYÚSCULAS
+    # (Sección de tabla y descarga sin cambios respecto a la última versión)
+    st.subheader("📋 Tabla de Datos Filtrados"); df_table_display = df_filtered.copy()
+    for col_name_str_tbl in ['D.V', 'RUN', 'CELULAR']:
         if col_name_str_tbl in df_table_display.columns: df_table_display[col_name_str_tbl] = df_table_display[col_name_str_tbl].astype(str)
-
-    # Ordenar columnas
     base_cols_tbl = [course_col_name] if course_col_name in df_table_display.columns else []
     base_cols_tbl.extend(['LATITUD_GEO_FINAL', 'LONGITUD_GEO_FINAL', 'GEOCODING_STATUS'])
     if st.session_state.used_existing_coords:
-         orig_lat_col_name_tbl = next((col for col in df_table_display.columns if col == 'LATITUD'), None)
-         orig_lon_col_name_tbl = next((col for col in df_table_display.columns if col == 'LONGITUD'), None)
+         orig_lat_col_name_tbl = next((col for col in df_table_display.columns if col == 'LATITUD'), None); orig_lon_col_name_tbl = next((col for col in df_table_display.columns if col == 'LONGITUD'), None)
          if orig_lat_col_name_tbl and orig_lat_col_name_tbl not in base_cols_tbl: base_cols_tbl.insert(1, orig_lat_col_name_tbl);
          if orig_lon_col_name_tbl and orig_lon_col_name_tbl not in base_cols_tbl: base_cols_tbl.insert(2, orig_lon_col_name_tbl)
     elif st.session_state.street_column_used and st.session_state.commune_column_used:
-        # Nombres de columna de dirección y comuna también deben estar en mayúsculas
-        street_col_upper_tbl = str(st.session_state.street_column_used).strip().upper() if st.session_state.street_column_used else None
-        commune_col_upper_tbl = str(st.session_state.commune_column_used).strip().upper() if st.session_state.commune_column_used else None
+        street_col_upper_tbl = str(st.session_state.street_column_used).strip().upper() if st.session_state.street_column_used else None; commune_col_upper_tbl = str(st.session_state.commune_column_used).strip().upper() if st.session_state.commune_column_used else None
         if 'ADDRESS_USED_FOR_GEOCODING' in df_table_display.columns: base_cols_tbl.insert(1, 'ADDRESS_USED_FOR_GEOCODING')
         if commune_col_upper_tbl and commune_col_upper_tbl in df_table_display.columns: base_cols_tbl.insert(1, commune_col_upper_tbl)
         if street_col_upper_tbl and street_col_upper_tbl in df_table_display.columns: base_cols_tbl.insert(1, street_col_upper_tbl)
     other_cols_tbl = [col for col in df_table_display.columns if col not in base_cols_tbl and col not in ['LATITUD_GEO', 'LONGITUD_GEO']];
-    final_cols_order_tbl = base_cols_tbl + other_cols_tbl
-    final_cols_to_display_tbl = [col for col in final_cols_order_tbl if col in df_table_display.columns]
+    final_cols_order_tbl = base_cols_tbl + other_cols_tbl; final_cols_to_display_tbl = [col for col in final_cols_order_tbl if col in df_table_display.columns]
     st.dataframe(df_table_display[final_cols_to_display_tbl])
-
-    # --- Descarga ---
     @st.cache_data
     def convert_df_to_excel(_df_to_convert, _cols_to_include):
         output = io.BytesIO(); df_download = _df_to_convert[_cols_to_include].copy()
-        for col_name_str_dl_tbl in ['D.V', 'RUN', 'CELULAR']: # Nombres en MAYÚSCULAS
+        for col_name_str_dl_tbl in ['D.V', 'RUN', 'CELULAR']:
              if col_name_str_dl_tbl in df_download.columns: df_download[col_name_str_dl_tbl] = df_download[col_name_str_dl_tbl].astype(str)
         with pd.ExcelWriter(output, engine='openpyxl') as writer: df_download.to_excel(writer, index=False, sheet_name='DatosFiltrados')
         return output.getvalue()
